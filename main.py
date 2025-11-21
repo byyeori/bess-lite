@@ -12,6 +12,17 @@ from thop import profile, clever_format
 BASE_DIR = "data"
 FEATURE_CSV = "data.csv"
 DATA_PATH = os.path.join(BASE_DIR, FEATURE_CSV)
+CKPT_DIR = "ckpt"
+MODEL_CKPT = os.path.join(CKPT_DIR, "best_memory_model.pth")
+SCALER_KEYS = ("weather", "signal", "history", "pv_y", "net_y", "wind_y")
+SCALER_FILES = {
+    "weather": os.path.join(CKPT_DIR, "scaler_weather.pkl"),
+    "signal": os.path.join(CKPT_DIR, "scaler_pvload.pkl"),
+    "history": os.path.join(CKPT_DIR, "scaler_history.pkl"),
+    "pv_y": os.path.join(CKPT_DIR, "scaler_pv_y.pkl"),
+    "net_y": os.path.join(CKPT_DIR, "scaler_load_y.pkl"),
+    "wind_y": os.path.join(CKPT_DIR, "scaler_wind_y.pkl"),
+}
 EPOCHS = 50
 WINDOW = 48
 HORIZON = 1  # hours
@@ -39,6 +50,26 @@ def add_rolling_lag_features(df, target_col, prefix, window_sizes=[6, 12, 24], l
     for l in lags:
         features[f"{prefix}lag_{l}h"] = target.shift(l)
     return features.bfill().ffill().fillna(0)
+
+
+def ensure_ckpt_dir():
+    os.makedirs(CKPT_DIR, exist_ok=True)
+
+
+def save_scalers(scalers):
+    ensure_ckpt_dir()
+    for key, scaler in zip(SCALER_KEYS, scalers):
+        joblib.dump(scaler, SCALER_FILES[key])
+
+
+def scalers_available():
+    return all(os.path.exists(SCALER_FILES[key]) for key in SCALER_KEYS)
+
+
+def load_scalers():
+    if not scalers_available():
+        raise FileNotFoundError("❌ Saved scalers not found in ckpt/. Train the model first.")
+    return tuple(joblib.load(SCALER_FILES[key]) for key in SCALER_KEYS)
 
 
 class MemoryModel(nn.Module):
@@ -299,6 +330,7 @@ set_seed(42)
 if __name__ == "__main__":  
     if not os.path.exists(DATA_PATH):
         raise FileNotFoundError(f"❌ Data file not found: {DATA_PATH}")
+    ensure_ckpt_dir()
     df = pd.read_csv(DATA_PATH)
     df.rename(columns={
         "pv_kw": "pv_kW",
@@ -376,9 +408,15 @@ if __name__ == "__main__":
 
         if val_metric < best_val:
             best_val = val_metric
-            torch.save(model.state_dict(), "best_memory_model.pth")
+            torch.save(model.state_dict(), MODEL_CKPT)
+            save_scalers(shared_scalers)
 
-    model.load_state_dict(torch.load("best_memory_model.pth"))
+    persisted_scalers = load_scalers() if scalers_available() else shared_scalers
+    model.load_state_dict(torch.load(MODEL_CKPT, map_location=device))
+    val_ds = BESSDataset(val_df, scalers=persisted_scalers, seq_len=WINDOW, pred_len=HORIZON)
+    test_ds = BESSDataset(test_df, scalers=persisted_scalers, seq_len=WINDOW, pred_len=HORIZON)
+    val_loader = DataLoader(val_ds, batch_size=32, shuffle=False)
+    test_loader = DataLoader(test_ds, batch_size=32, shuffle=False)
     pv_mse, pv_rmse, pv_mae, net_mse, net_rmse, net_mae, wind_mse, wind_rmse, wind_mae = evaluate(model, test_loader, device)
     print("\n===== Final Test Results =====")
     print(f"PV   -> MSE: {pv_mse:.4f}, RMSE: {pv_rmse:.4f}, MAE: {pv_mae:.4f}")
@@ -404,5 +442,5 @@ if __name__ == "__main__":
     print(f"FLOPs  : {flops}")
     print(f"Params : {params}")
     # latency = measure_latency(model, shared_scalers, df.tail(1000), device)
-    latency = measure_latency(model, shared_scalers, df, device)
+    latency = measure_latency(model, persisted_scalers, df, device)
     print(f"\nInference Latency: {latency:.2f} ms ({'GPU' if device.type=='cuda' else 'CPU'})")
