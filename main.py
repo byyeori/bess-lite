@@ -14,7 +14,7 @@ FEATURE_CSV = "data.csv"
 DATA_PATH = os.path.join(BASE_DIR, FEATURE_CSV)
 EPOCHS = 50
 WINDOW = 48
-HORIZON = 1
+HORIZON = 1  # hours
 
 torch.autograd.set_detect_anomaly(False)
 torch.backends.cudnn.benchmark = True
@@ -39,8 +39,6 @@ def add_rolling_lag_features(df, target_col, prefix, window_sizes=[6, 12, 24], l
     for l in lags:
         features[f"{prefix}lag_{l}h"] = target.shift(l)
     return features.bfill().ffill().fillna(0)
-
-
 
 
 class MemoryModel(nn.Module):
@@ -102,7 +100,6 @@ class MemoryModel(nn.Module):
         return pv_pred, net_pred, wind_pred
 
 
-
 # def weighted_multitask_loss(pv_pred, load_pred, pv_true, load_true, daylight_mask):
 #     pv_loss = torch.mean(torch.abs(pv_pred - pv_true) * daylight_mask)
 #     peak_mask = (daylight_mask == 0).float() * 0.3 + 1.0
@@ -111,7 +108,6 @@ class MemoryModel(nn.Module):
 #     load_loss = torch.nan_to_num(load_loss, nan=0.0, posinf=10.0, neginf=-10.0)
 
 #     return pv_loss + 0.5 * load_loss
-
 
 
 class BESSDataset(Dataset):
@@ -332,7 +328,6 @@ if __name__ == "__main__":
     train_end = int(n * 0.7)
     val_end = int(n * 0.85)
     # train_df, val_df, test_df = df[:train_end], df[train_end:val_end], df[val_end:]
-
 
     train_df = df[:train_end].copy()
     val_df   = df[train_end:val_end].copy()

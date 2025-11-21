@@ -1,4 +1,4 @@
-# bess-lite
+# Bess-Lite
 
 Lightweight forecasting model for Battery Energy Storage Systems (BESS).
 
