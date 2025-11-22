@@ -14,18 +14,18 @@ FEATURE_CSV = "data.csv"
 DATA_PATH = os.path.join(BASE_DIR, FEATURE_CSV)
 CKPT_DIR = "ckpt"
 MODEL_CKPT = os.path.join(CKPT_DIR, "best_memory_model.pth")
-SCALER_KEYS = ("weather", "signal", "history", "pv_y", "net_y", "wind_y")
+SCALER_KEYS = ("weather", "signal", "pv_y", "net_y", "wind_y") # history 제거
 SCALER_FILES = {
     "weather": os.path.join(CKPT_DIR, "scaler_weather.pkl"),
     "signal": os.path.join(CKPT_DIR, "scaler_pvload.pkl"),
-    "history": os.path.join(CKPT_DIR, "scaler_history.pkl"),
+    # "history": os.path.join(CKPT_DIR, "scaler_history.pkl"),
     "pv_y": os.path.join(CKPT_DIR, "scaler_pv_y.pkl"),
     "net_y": os.path.join(CKPT_DIR, "scaler_load_y.pkl"),
     "wind_y": os.path.join(CKPT_DIR, "scaler_wind_y.pkl"),
 }
 EPOCHS = 50
 WINDOW = 48
-HORIZON = 1  # hours
+HORIZON = 1 # hours
 
 torch.autograd.set_detect_anomaly(False)
 torch.backends.cudnn.benchmark = True
@@ -40,16 +40,16 @@ def get_sinusoidal_encoding(hour, day):
         torch.sin(day_rad), torch.cos(day_rad)
     ], dim=-1)
 
-def add_rolling_lag_features(df, target_col, prefix, window_sizes=[6, 12, 24], lags=[1, 2, 24, 168]):
-    """Return rolling and lag features for a given signal."""
-    features = pd.DataFrame(index=df.index)
-    target = df[target_col]
-    for w in window_sizes:
-        features[f"{prefix}roll_mean_{w}h"] = target.rolling(w).mean()
-        features[f"{prefix}roll_std_{w}h"] = target.rolling(w).std()
-    for l in lags:
-        features[f"{prefix}lag_{l}h"] = target.shift(l)
-    return features.bfill().ffill().fillna(0)
+# def add_rolling_lag_features(df, target_col, prefix, window_sizes=[6, 12, 24], lags=[1, 2, 24, 168]):
+#     """Return rolling and lag features for a given signal."""
+#     features = pd.DataFrame(index=df.index)
+#     target = df[target_col]
+#     for w in window_sizes:
+#         features[f"{prefix}roll_mean_{w}h"] = target.rolling(w).mean()
+#         features[f"{prefix}roll_std_{w}h"] = target.rolling(w).std()
+#     for l in lags:
+#         features[f"{prefix}lag_{l}h"] = target.shift(l)
+#     return features.bfill().ffill().fillna(0)
 
 
 def ensure_ckpt_dir():
@@ -148,15 +148,17 @@ class BESSDataset(Dataset):
 
         self.weather_cols = ['DHI', 'DNI', 'GHI', 'Wind Speed', 'Temperature', 'Pressure']
         self.signal_cols = ['pv_kW', 'net_load', 'wind_kW']
-        history_prefixes = ['pv_', 'net_', 'wind_']
-        self.history_cols = sorted([
-            c for c in df.columns
-            if any(
-                c.startswith(f"{prefix}roll_") or c.startswith(f"{prefix}lag_")
-                for prefix in history_prefixes
-            )
-        ])
-        self.feature_cols = self.weather_cols + self.signal_cols + self.history_cols
+        # history_prefixes = ['pv_', 'net_', 'wind_']
+        # self.history_cols = sorted([
+        #     c for c in df.columns
+        #     if any(
+        #         c.startswith(f"{prefix}roll_") or c.startswith(f"{prefix}lag_")
+        #         for prefix in history_prefixes
+        #     )
+        # ])
+        self.history_cols = []
+        # self.feature_cols = self.weather_cols + self.signal_cols + self.history_cols
+        self.feature_cols = self.weather_cols + self.signal_cols
 
         missing = [c for c in self.feature_cols if c not in df.columns]
         if missing:
@@ -170,14 +172,14 @@ class BESSDataset(Dataset):
         if scalers is None:
             self.scaler_weather = StandardScaler()
             self.scaler_signal = MinMaxScaler()
-            self.scaler_history = StandardScaler()
+            # self.scaler_history = StandardScaler()
             self.scaler_pv_y = MinMaxScaler()
             self.scaler_net_y = MinMaxScaler()
             self.scaler_wind_y = MinMaxScaler()
 
             weather_scaled = self.scaler_weather.fit_transform(df[self.weather_cols])
             signal_scaled = self.scaler_signal.fit_transform(df[self.signal_cols])
-            history_scaled = self.scaler_history.fit_transform(df[self.history_cols])
+            # history_scaled = self.scaler_history.fit_transform(df[self.history_cols])
             pv_y_scaled = self.scaler_pv_y.fit_transform(df[['pv_kW']])
             net_y_scaled = self.scaler_net_y.fit_transform(df[['net_load']])
             wind_y_scaled = self.scaler_wind_y.fit_transform(df[['wind_kW']])
@@ -187,20 +189,21 @@ class BESSDataset(Dataset):
             (
                 self.scaler_weather,
                 self.scaler_signal,
-                self.scaler_history,
+                # self.scaler_history,
                 self.scaler_pv_y,
                 self.scaler_net_y,
                 self.scaler_wind_y,
             ) = scalers
             weather_scaled = self.scaler_weather.transform(df[self.weather_cols])
             signal_scaled = self.scaler_signal.transform(df[self.signal_cols])
-            history_scaled = self.scaler_history.transform(df[self.history_cols])
+            # history_scaled = self.scaler_history.transform(df[self.history_cols])
             pv_y_scaled = self.scaler_pv_y.transform(df[['pv_kW']])
             net_y_scaled = self.scaler_net_y.transform(df[['net_load']])
             wind_y_scaled = self.scaler_wind_y.transform(df[['wind_kW']])
 
 
-        self.features = np.concatenate([weather_scaled, signal_scaled, history_scaled], axis=1)
+        # self.features = np.concatenate([weather_scaled, signal_scaled, history_scaled], axis=1)
+        self.features = np.concatenate([weather_scaled, signal_scaled], axis=1)
         self.pv_y = pv_y_scaled.squeeze()
         self.net_y = net_y_scaled.squeeze()
         self.wind_y = wind_y_scaled.squeeze()
@@ -227,11 +230,20 @@ class BESSDataset(Dataset):
         }
 
 
+# def multitask_loss(pv_pred, net_pred, wind_pred, pv_true, net_true, wind_true):
+#     pv_loss = torch.mean(torch.abs(pv_pred - pv_true))
+#     net_loss = torch.mean(torch.abs(net_pred - net_true))
+#     wind_loss = torch.mean(torch.abs(wind_pred - wind_true))
+#     return pv_loss + net_loss + wind_loss
+
+criterion = nn.MSELoss()
+
 def multitask_loss(pv_pred, net_pred, wind_pred, pv_true, net_true, wind_true):
-    pv_loss = torch.mean(torch.abs(pv_pred - pv_true))
-    net_loss = torch.mean(torch.abs(net_pred - net_true))
-    wind_loss = torch.mean(torch.abs(wind_pred - wind_true))
-    return pv_loss + net_loss + wind_loss
+    # (B, pred_len) 형태의 3개 타깃을 concat하여 하나의 벡터로 만듦
+    pred = torch.cat([pv_pred, net_pred, wind_pred], dim=-1)
+    true = torch.cat([pv_true, net_true, wind_true], dim=-1)
+    return criterion(pred, true)
+
 
 def evaluate(model, loader, device):
     model.eval()
@@ -347,13 +359,13 @@ if __name__ == "__main__":
     if missing_signals:
         raise ValueError(f"Missing required columns: {missing_signals}")
 
-    history_specs = [
-        ("pv_kW", "pv_"),
-        ("net_load", "net_"),
-        ("wind_kW", "wind_"),
-    ]
-    history_frames = [add_rolling_lag_features(df, col, prefix=prefix) for col, prefix in history_specs]
-    df = pd.concat([df] + history_frames, axis=1)
+    # history_specs = [
+    #     ("pv_kW", "pv_"),
+    #     ("net_load", "net_"),
+    #     ("wind_kW", "wind_"),
+    # ]
+    # history_frames = [add_rolling_lag_features(df, col, prefix=prefix) for col, prefix in history_specs]
+    # df = pd.concat([df] + history_frames, axis=1)
 
 
     n = len(df)
@@ -370,7 +382,7 @@ if __name__ == "__main__":
     shared_scalers = (
         train_ds.scaler_weather,
         train_ds.scaler_signal,
-        train_ds.scaler_history,
+        # train_ds.scaler_history,
         train_ds.scaler_pv_y,
         train_ds.scaler_net_y,
         train_ds.scaler_wind_y,
@@ -379,19 +391,19 @@ if __name__ == "__main__":
     val_ds = BESSDataset(val_df, scalers=shared_scalers, seq_len=WINDOW, pred_len=HORIZON)
     test_ds = BESSDataset(test_df, scalers=shared_scalers, seq_len=WINDOW, pred_len=HORIZON)
 
-    train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=32, shuffle=False)
-    test_loader = DataLoader(test_ds, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=128, shuffle=False)
+    test_loader = DataLoader(test_ds, batch_size=128, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     input_dim = len(train_ds.feature_cols)
     model = MemoryModel(input_features=input_dim, pred_len=train_ds.pred_len).to(device)
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=3e-4,
+        max_lr=0.003,
         total_steps=len(train_loader) * EPOCHS
     )
 
