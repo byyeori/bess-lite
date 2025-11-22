@@ -1,0 +1,132 @@
+constraints:
+  flops_max: 300000    # per inference
+  params_max: 30000    # count (≈30 KB @ INT8)
+  latency_target_ms: 2 # Cortex-M7 @ 400 MHz
+  allowed_ops:
+    - depthwise_conv1d
+    - pointwise_conv1d
+    - conv1d
+    - squeeze_excitation
+    - channel_attention
+    - simple_mlp
+    - residual_add
+    - fused_batchnorm_conv
+    - relu
+    - linear
+
+search_space:
+  inputs:
+    seq_len:
+      baseline: 24
+      values: [18, 24, 30, 36, 48]
+    pred_len:
+      baseline: 3
+      values: [3, 4, 6]
+  architecture:
+    hidden_dim:
+      baseline: 32
+      values: [24, 32, 40, 48, 56]
+    dilated_blocks:
+      baseline: 3
+      values: [2, 3, 4]
+    dilation_pattern:
+      baseline: [2, 4, 8]
+      values:
+        - [1, 2]
+        - [2, 4]
+        - [1, 2, 4]
+        - [2, 4, 8]
+        - [1, 3, 9]
+        - [1, 2, 4, 8]
+        - [2, 4, 8, 16]
+    kernel_size:
+      baseline: 5
+      values: [3, 5]
+  temporal_embedding:
+    sinusoidal_dim:
+      baseline: 4
+      values: [4, 8, 16, 24]
+  memory:
+    ema_decay:
+      baseline: 0.9
+      values: [0.8, 0.9, 0.95]
+    learnable_ema:
+      baseline: false
+      values: [false, true]
+  lightweight_blocks:
+    se_block:
+      baseline: none
+      values:
+        - none
+        - squeeze_ratio_8
+        - squeeze_ratio_4
+    residual:
+      baseline: all_blocks
+      values:
+        - all_blocks
+        - last_block
+        - 'off'
+    dropout:
+      baseline: 0.0
+      values: [0.0, 0.05, 0.1, 0.15, 0.2]
+  loss:
+    target_weights:
+      baseline: [1.0, 1.0, 1.0]
+      values:
+        - [1.0, 1.0, 1.0]
+        - [0.6, 1.0, 1.4]
+        - [1.3, 1.0, 0.7]
+        - [1.0, 1.4, 0.8]
+        - [0.8, 1.2, 1.0]
+    normalized_mae:
+      baseline: false
+      values: [false, true]
+
+notes:
+  - Discard candidates exceeding FLOPs or parameter limits before training.
+  - pred_len directly affects head size; re-evaluate FLOPs per candidate.
+  - Use short warm-up training for NAS, then retrain top models fully.
+data_split:
+  train: "2014-01-01 00:00:00 -> 2014-09-30 23:00:00"
+  val: "2014-10-01 00:00:00 -> 2014-12-31 23:00:00"
+  seed: 42
+training:
+  warmup_epochs: 80
+  batch_size: 64
+  optimizer:
+    type: adam
+    beta1: 0.9
+    beta2: 0.999
+  scheduler:
+    type: onecycle
+    max_lr: 0.0008
+    pct_start: 0.3
+    div_factor: 10
+    final_div_factor: 10
+resource_filter:
+  tool: thop
+  dummy_input:
+    batch: 1
+    seq_len: candidate
+    pred_len: candidate
+  tolerance: 0.01   # 1%
+  rule: "reject if flops>3e5 or params>3e4 beyond tolerance"
+evaluation:
+  primary_metric: mae_sum
+  tie_breakers:
+    - load_rmse
+    - flops
+logging:
+  trial_id_format: "YYYYMMDDHHMMSS_rand4"
+  folder: "runs/nas/<trial_id>"
+  warmup_artifacts:
+    - config.yaml
+    - metrics.json
+  retrain_artifacts:
+    - config.yaml
+    - metrics.json
+    - best.ckpt
+retraining:
+  top_k: 5
+  recipe: baseline_full   # 200 epoch, batch 64, Adam + OneCycle
+  notes: "NAS 단계에서는 best.ckpt 확보까지 진행, 양자화는 별도 프로세스로 분리"

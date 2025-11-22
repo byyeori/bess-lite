@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from thop import profile, clever_format
 
 BASE_DIR = "data"
-FEATURE_CSV = "urop_data.csv"
+FEATURE_CSV = "urop_data_final.csv"
 DATA_PATH = os.path.join(BASE_DIR, FEATURE_CSV)
 EPOCHS = 30
 torch.autograd.set_detect_anomaly(False)
@@ -60,8 +60,7 @@ class MemoryBranch(nn.Module):
             nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=8, dilation=8),
             nn.ReLU(),
         )
-        # self.memory_decay = nn.Parameter(torch.tensor(0.9), requires_grad=False)
-        self.memory_decay = nn.Parameter(torch.tensor(0.9, device=x.device), requires_grad=False)
+        self.memory_decay = nn.Parameter(torch.tensor(0.9), requires_grad=False)
         self.time_decoder = nn.Linear(hidden_dim + 4, hidden_dim)
 
     def forward(self, x, hour_idx, day_idx):
@@ -109,32 +108,28 @@ class MemoryModel(nn.Module):
     def __init__(self, input_features, pred_len=24, hidden_dim=32):
         super().__init__()
         self.branch = MemoryBranch(input_features, pred_len, hidden_dim)
+        self.wind_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 1)
+        )
         self.pv_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, 1)
         )
-        self.net_head = nn.Sequential(
+        self.load_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, 1)
         )
 
-    def forward(self, x, hour_idx, day_idx, pv_mask, net_mask):
-        B = x.size(0)
-        # --- Ensure correct batch masking ---
-        if pv_mask.dim() == 1:
-            pv_mask = pv_mask.unsqueeze(0).expand(B, -1)
-        if net_mask.dim() == 1:
-            net_mask = net_mask.unsqueeze(0).expand(B, -1)
-        pv_x  = x * pv_mask.unsqueeze(1)
-        net_x = x * net_mask.unsqueeze(1)
-        pv_repr  = self.branch(pv_x, hour_idx, day_idx)
-        net_repr = self.branch(net_x, hour_idx, day_idx)
-        pv_pred  = self.pv_head(pv_repr).squeeze(-1)
-        net_pred = self.net_head(net_repr).squeeze(-1)
-
-        return pv_pred, net_pred
+    def forward(self, x, hour_idx, day_idx):
+        shared_repr = self.branch(x, hour_idx, day_idx)
+        wind_pred = self.wind_head(shared_repr).squeeze(-1)
+        pv_pred = self.pv_head(shared_repr).squeeze(-1)
+        load_pred = self.load_head(shared_repr).squeeze(-1)
+        return wind_pred, pv_pred, load_pred
 
 
 # def weighted_multitask_loss(pv_pred, load_pred, pv_true, load_true, daylight_mask):
@@ -153,14 +148,13 @@ class BESSDataset(Dataset):
         self.pred_len = pred_len
 
         self.weather_cols = ['DHI', 'DNI', 'GHI', 'Wind Speed', 'Temperature', 'Pressure']
-        self.pv_signal_cols = ['pv_kW']
-        self.net_signal_cols = ['net_load']
-        self.pv_history_cols = sorted([c for c in df.columns if c.startswith('pv_roll_') or c.startswith('pv_lag_')])
-        self.net_history_cols = sorted([c for c in df.columns if c.startswith('net_roll_') or c.startswith('net_lag_')])
-        self.feature_cols = (
-            self.weather_cols + self.pv_signal_cols + self.net_signal_cols +
-            self.pv_history_cols + self.net_history_cols
-        )
+        self.signal_cols = ['wind_kW', 'pv_kW', 'load_kW']
+        history_prefixes = ['wind_', 'pv_', 'load_']
+        self.history_cols = sorted([
+            c for c in df.columns
+            if any(c.startswith(f"{prefix}roll_") or c.startswith(f"{prefix}lag_") for prefix in history_prefixes)
+        ])
+        self.feature_cols = self.weather_cols + self.signal_cols + self.history_cols
 
         missing = [c for c in self.feature_cols if c not in df.columns]
         if missing:
@@ -170,86 +164,45 @@ class BESSDataset(Dataset):
 
         if scalers is None:
             self.scaler_weather = StandardScaler()
-            self.scaler_pv_signal = MinMaxScaler()
-            self.scaler_net_signal = MinMaxScaler()
-            self.scaler_pv_history = StandardScaler()
-            self.scaler_net_history = StandardScaler()
+            self.scaler_signal = MinMaxScaler()
+            self.scaler_history = StandardScaler()
+            self.scaler_wind_y = MinMaxScaler()
             self.scaler_pv_y = MinMaxScaler()
-            self.scaler_net_y = MinMaxScaler()
+            self.scaler_load_y = MinMaxScaler()
 
             weather_scaled = self.scaler_weather.fit_transform(df[self.weather_cols])
-            pv_signal_scaled = self.scaler_pv_signal.fit_transform(df[self.pv_signal_cols])
-            net_signal_scaled = self.scaler_net_signal.fit_transform(df[self.net_signal_cols])
-            pv_history_scaled = (
-                self.scaler_pv_history.fit_transform(df[self.pv_history_cols])
-                if self.pv_history_cols else np.zeros((len(df), 0))
+            signal_scaled = self.scaler_signal.fit_transform(df[self.signal_cols])
+            history_scaled = (
+                self.scaler_history.fit_transform(df[self.history_cols])
+                if self.history_cols else np.zeros((len(df), 0))
             )
-            net_history_scaled = (
-                self.scaler_net_history.fit_transform(df[self.net_history_cols])
-                if self.net_history_cols else np.zeros((len(df), 0))
-            )
+            wind_y_scaled = self.scaler_wind_y.fit_transform(df[['wind_kW']])
             pv_y_scaled = self.scaler_pv_y.fit_transform(df[['pv_kW']])
-            net_y_scaled = self.scaler_net_y.fit_transform(df[['net_load']])
+            load_y_scaled = self.scaler_load_y.fit_transform(df[['load_kW']])
 
         else:
             (
                 self.scaler_weather,
-                self.scaler_pv_signal,
-                self.scaler_net_signal,
-                self.scaler_pv_history,
-                self.scaler_net_history,
+                self.scaler_signal,
+                self.scaler_history,
+                self.scaler_wind_y,
                 self.scaler_pv_y,
-                self.scaler_net_y,
+                self.scaler_load_y,
             ) = scalers
             weather_scaled = self.scaler_weather.transform(df[self.weather_cols])
-            pv_signal_scaled = self.scaler_pv_signal.transform(df[self.pv_signal_cols])
-            net_signal_scaled = self.scaler_net_signal.transform(df[self.net_signal_cols])
-            pv_history_scaled = (
-                self.scaler_pv_history.transform(df[self.pv_history_cols])
-                if self.pv_history_cols else np.zeros((len(df), 0))
+            signal_scaled = self.scaler_signal.transform(df[self.signal_cols])
+            history_scaled = (
+                self.scaler_history.transform(df[self.history_cols])
+                if self.history_cols else np.zeros((len(df), 0))
             )
-            net_history_scaled = (
-                self.scaler_net_history.transform(df[self.net_history_cols])
-                if self.net_history_cols else np.zeros((len(df), 0))
-            )
+            wind_y_scaled = self.scaler_wind_y.transform(df[['wind_kW']])
             pv_y_scaled = self.scaler_pv_y.transform(df[['pv_kW']])
-            net_y_scaled = self.scaler_net_y.transform(df[['net_load']])
+            load_y_scaled = self.scaler_load_y.transform(df[['load_kW']])
 
-        self.features = np.concatenate(
-            [weather_scaled, pv_signal_scaled, net_signal_scaled, pv_history_scaled, net_history_scaled],
-            axis=1
-        )
-        self.group_slices = {}
-        offset = 0
-        for name, cols in [
-            ("weather", self.weather_cols),
-            ("pv_signal", self.pv_signal_cols),
-            ("net_signal", self.net_signal_cols),
-            ("pv_history", self.pv_history_cols),
-            ("net_history", self.net_history_cols)
-        ]:
-            length = len(cols)
-            self.group_slices[name] = slice(offset, offset + length)
-            offset += length
-
-        total_dim = self.features.shape[1]
-        print(total_dim)
-        self.pv_mask = np.ones(total_dim, dtype=np.float32) # shape = (24,)
-        self.net_mask = np.ones(total_dim, dtype=np.float32)
-        net_sig_slice = self.group_slices["net_signal"]
-        net_hist_slice = self.group_slices["net_history"]
-        pv_sig_slice = self.group_slices["pv_signal"]
-        pv_hist_slice = self.group_slices["pv_history"]
-        if net_sig_slice.stop > net_sig_slice.start:
-            self.pv_mask[net_sig_slice] = 0.0
-        if net_hist_slice.stop > net_hist_slice.start:
-            self.pv_mask[net_hist_slice] = 0.0
-        if pv_sig_slice.stop > pv_sig_slice.start:
-            self.net_mask[pv_sig_slice] = 0.0
-        if pv_hist_slice.stop > pv_hist_slice.start:
-            self.net_mask[pv_hist_slice] = 0.0
+        self.features = np.concatenate([weather_scaled, signal_scaled, history_scaled], axis=1)
+        self.wind_y = wind_y_scaled.squeeze()
         self.pv_y = pv_y_scaled.squeeze()
-        self.net_y = net_y_scaled.squeeze()
+        self.load_y = load_y_scaled.squeeze()
         self.hours = df['hour'].values
         self.days = df['day_of_week'].values
 
@@ -260,49 +213,55 @@ class BESSDataset(Dataset):
         x = self.features[idx:idx+self.seq_len]
         hour_idx = self.hours[idx:idx+self.seq_len]
         day_idx = self.days[idx:idx+self.seq_len]
+        wind_y = self.wind_y[idx+self.seq_len:idx+self.seq_len+self.pred_len]
         pv_y = self.pv_y[idx+self.seq_len:idx+self.seq_len+self.pred_len]
-        net_y = self.net_y[idx+self.seq_len:idx+self.seq_len+self.pred_len]
+        load_y = self.load_y[idx+self.seq_len:idx+self.seq_len+self.pred_len]
         return {
             'x': torch.FloatTensor(x),
             'hour_idx': torch.LongTensor(hour_idx),
             'day_idx': torch.LongTensor(day_idx),
+            'wind_y': torch.FloatTensor(wind_y),
             'pv_y': torch.FloatTensor(pv_y),
-            'net_y': torch.FloatTensor(net_y),
-            'pv_mask': torch.FloatTensor(self.pv_mask),
-            'net_mask': torch.FloatTensor(self.net_mask)
+            'load_y': torch.FloatTensor(load_y)
         }
 
 
-def multitask_loss(pv_pred, net_pred, pv_true, net_true):
+def multitask_loss(wind_pred, pv_pred, load_pred, wind_true, pv_true, load_true):
+    wind_loss = torch.mean(torch.abs(wind_pred - wind_true))
     pv_loss = torch.mean(torch.abs(pv_pred - pv_true))
-    net_loss = torch.mean(torch.abs(net_pred - net_true))
-    return pv_loss + net_loss
+    load_loss = torch.mean(torch.abs(load_pred - load_true))
+    return wind_loss + pv_loss + load_loss
 
 def evaluate(model, loader, device):
     model.eval()
+    wind_mse, wind_rmse, wind_mae = [], [], []
     pv_mse, pv_rmse, pv_mae = [], [], []
-    net_mse, net_rmse, net_mae = [], [], []
+    load_mse, load_rmse, load_mae = [], [], []
     with torch.no_grad():
         for batch in loader:
             x = batch['x'].to(device)
             hour = batch['hour_idx'].to(device)
             day = batch['day_idx'].to(device)
+            wind_y = batch['wind_y'].to(device)
             pv_y = batch['pv_y'].to(device)
-            net_y = batch['net_y'].to(device)
-            pv_mask = batch['pv_mask'].to(device)
-            net_mask = batch['net_mask'].to(device)
-            pv_pred, net_pred = model(x, hour, day, pv_mask, net_mask)
+            load_y = batch['load_y'].to(device)
+            wind_pred, pv_pred, load_pred = model(x, hour, day)
+            wind_err = wind_pred - wind_y
             pv_err = pv_pred - pv_y
-            net_err = net_pred - net_y
+            load_err = load_pred - load_y
+            wind_mse.append(torch.mean(wind_err ** 2).item())
+            wind_rmse.append(torch.sqrt(torch.mean(wind_err ** 2)).item())
+            wind_mae.append(torch.mean(torch.abs(wind_err)).item())
             pv_mse.append(torch.mean(pv_err ** 2).item())
             pv_rmse.append(torch.sqrt(torch.mean(pv_err ** 2)).item())
             pv_mae.append(torch.mean(torch.abs(pv_err)).item())
-            net_mse.append(torch.mean(net_err ** 2).item())
-            net_rmse.append(torch.sqrt(torch.mean(net_err ** 2)).item())
-            net_mae.append(torch.mean(torch.abs(net_err)).item())
+            load_mse.append(torch.mean(load_err ** 2).item())
+            load_rmse.append(torch.sqrt(torch.mean(load_err ** 2)).item())
+            load_mae.append(torch.mean(torch.abs(load_err)).item())
     return (
+        np.mean(wind_mse), np.mean(wind_rmse), np.mean(wind_mae),
         np.mean(pv_mse), np.mean(pv_rmse), np.mean(pv_mae),
-        np.mean(net_mse), np.mean(net_rmse), np.mean(net_mae)
+        np.mean(load_mse), np.mean(load_rmse), np.mean(load_mae)
     )
 
 
@@ -315,13 +274,12 @@ def train_epoch(model, loader, optimizer, scheduler, device):
         x = batch['x'].to(device)
         hour_idx = batch['hour_idx'].to(device)
         day_idx = batch['day_idx'].to(device)
+        wind_y = batch['wind_y'].to(device)
         pv_y = batch['pv_y'].to(device)
-        net_y = batch['net_y'].to(device)
-        pv_mask = batch['pv_mask'].to(device)
-        net_mask = batch['net_mask'].to(device)
+        load_y = batch['load_y'].to(device)
         optimizer.zero_grad()
-        pv_pred, net_pred = model(x, hour_idx, day_idx, pv_mask, net_mask)
-        loss = multitask_loss(pv_pred, net_pred, pv_y, net_y)
+        wind_pred, pv_pred, load_pred = model(x, hour_idx, day_idx)
+        loss = multitask_loss(wind_pred, pv_pred, load_pred, wind_y, pv_y, load_y)
         if torch.isnan(loss):
             print("⚠️ NaN detected in loss. Skipping batch.")
             continue
@@ -358,22 +316,22 @@ def measure_latency(model, dataset, device):
     """Robust latency measurement with full safety checks."""
     # 1) dataset 길이 검증
     if len(dataset) == 0:
-        print("⚠️ measure_latency aborted: dataset is empty.")
+        print("WARN: measure_latency aborted: dataset is empty.")
         return float('nan')
 
     # 2) 마지막 샘플 가져오기 (IndexError 예방)
     try:
         sample = dataset[-1]
     except Exception as e:
-        print(f"⚠️ measure_latency aborted: cannot fetch sample. Error: {e}")
+        print(f"WARN: measure_latency aborted: cannot fetch sample. Error: {e}")
         return float('nan')
 
-    required_keys = ['x', 'hour_idx', 'day_idx', 'pv_mask', 'net_mask']
+    required_keys = ['x', 'hour_idx', 'day_idx']
 
     # 3) sample key 검증
     for k in required_keys:
         if k not in sample:
-            print(f"⚠️ measure_latency aborted: sample missing key '{k}'")
+            print(f"WARN: measure_latency aborted: sample missing key '{k}'")
             return float('nan')
 
     # 4) 텐서 차원/shape 검증
@@ -381,36 +339,35 @@ def measure_latency(model, dataset, device):
         x = sample['x'].unsqueeze(0).to(device)
         hour = sample['hour_idx'].unsqueeze(0).to(device)
         day = sample['day_idx'].unsqueeze(0).to(device)
-        pv_mask = sample['pv_mask'].unsqueeze(0).to(device)
-        net_mask = sample['net_mask'].unsqueeze(0).to(device)
     except Exception as e:
-        print(f"⚠️ measure_latency aborted: tensor conversion error: {e}")
+        print(f"WARN: measure_latency aborted: tensor conversion error: {e}")
         return float('nan')
 
     # 5) feature dimension이 모델과 맞는지 확인
     input_dim = model.branch.temporal_conv[0].in_channels
     if x.shape[-1] != input_dim:
-        print(f"⚠️ measure_latency aborted: feature dim mismatch.")
+        print("WARN: measure_latency aborted: feature dim mismatch.")
         print(f"    model expects {input_dim}, dataset provides {x.shape[-1]}")
         return float('nan')
 
-    if pv_mask.shape[-1] != input_dim or net_mask.shape[-1] != input_dim:
-        print("⚠️ measure_latency aborted: mask dimension mismatch.")
+    min_seq = model.branch.temporal_conv[0].kernel_size[0]
+    if x.shape[1] < min_seq:
+        print(f"WARN: latency skipped because sequence len {x.shape[1]} < kernel {min_seq}.")
         return float('nan')
 
     # 6) device 검증 (cuda 없는 환경에서 cuda 호출 방지)
     if device.type == 'cuda' and not torch.cuda.is_available():
-        print("⚠️ CUDA not available. Falling back to CPU.")
+        print("WARN: CUDA not available. Falling back to CPU.")
         device = torch.device("cpu")
 
     # 7) warm-up
     try:
         for _ in range(5):
-            _ = model(x, hour, day, pv_mask, net_mask)
+            _ = model(x, hour, day)
         if device.type == "cuda":
             torch.cuda.synchronize()
     except Exception as e:
-        print(f"⚠️ measure_latency aborted during warm-up: {e}")
+        print(f"WARN: measure_latency aborted during warm-up: {e}")
         return float('nan')
 
     # 8) 실제 latency 측정
@@ -418,12 +375,12 @@ def measure_latency(model, dataset, device):
         start = time.time()
         for _ in range(30):
             with torch.no_grad():
-                _ = model(x, hour, day, pv_mask, net_mask)
+                _ = model(x, hour, day)
         if device.type == "cuda":
             torch.cuda.synchronize()
         end = time.time()
     except Exception as e:
-        print(f"⚠️ measure_latency aborted during measurement: {e}")
+        print(f"WARN: measure_latency aborted during measurement: {e}")
         return float('nan')
 
     return (end - start) / 30 * 1000  # milliseconds
@@ -445,19 +402,25 @@ if __name__ == "__main__":
     if not os.path.exists(DATA_PATH):
         raise FileNotFoundError(f"❌ Data file not found: {DATA_PATH}")
     df = pd.read_csv(DATA_PATH)
+    df.rename(columns={
+        "pv_kw": "pv_kW",
+        "load_kw": "load_kW",
+        "wind_kw": "wind_kW",
+    }, inplace=True)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
     df = df.dropna(subset=["timestamp"]).reset_index(drop=True)
     df["hour"] = df["timestamp"].dt.hour
     df["day_of_week"] = df["timestamp"].dt.dayofweek
 
-    required_signals = ["pv_kW", "net_load"]
+    required_signals = ["pv_kW", "load_kW", "wind_kW"]
     missing_signals = [c for c in required_signals if c not in df.columns]
     if missing_signals:
         raise ValueError(f"Missing required columns: {missing_signals}")
 
     history_specs = [
         ("pv_kW", "pv_"),
-        ("net_load", "net_")
+        ("load_kW", "load_"),
+        ("wind_kW", "wind_"),
     ]
     history_frames = [add_rolling_lag_features(df, col, prefix=prefix) for col, prefix in history_specs]
     df = pd.concat([df] + history_frames, axis=1)
@@ -478,12 +441,11 @@ if __name__ == "__main__":
     train_ds = BESSDataset(train_df, seq_len=24, pred_len=3)
     shared_scalers = (
         train_ds.scaler_weather,
-        train_ds.scaler_pv_signal,
-        train_ds.scaler_net_signal,
-        train_ds.scaler_pv_history,
-        train_ds.scaler_net_history,
+        train_ds.scaler_signal,
+        train_ds.scaler_history,
+        train_ds.scaler_wind_y,
         train_ds.scaler_pv_y,
-        train_ds.scaler_net_y,
+        train_ds.scaler_load_y,
     )
 
     val_ds = BESSDataset(val_df, seq_len=24, pred_len=3, scalers=shared_scalers)
@@ -508,22 +470,26 @@ if __name__ == "__main__":
     best_val = float("inf")
     for epoch in range(EPOCHS):
         train_loss = train_epoch(model, train_loader, optimizer, scheduler, device)
-        pv_mse, pv_rmse, pv_mae, net_mse, net_rmse, net_mae = evaluate(model, val_loader, device)
-        val_metric = (pv_rmse + net_rmse) / 2
+        wind_mse, wind_rmse, wind_mae, pv_mse, pv_rmse, pv_mae, load_mse, load_rmse, load_mae = evaluate(model, val_loader, device)
+        val_metric = (wind_rmse + pv_rmse + load_rmse) / 3
 
-        print(f"[{epoch+1:02d}/{EPOCHS}] Loss={train_loss:.4f} | "
-              f"PV (MSE {pv_mse:.4f}, RMSE {pv_rmse:.4f}, MAE {pv_mae:.4f}) | "
-              f"Net (MSE {net_mse:.4f}, RMSE {net_rmse:.4f}, MAE {net_mae:.4f})")
+        print(
+            f"[{epoch+1:02d}/{EPOCHS}] Loss={train_loss:.4f} | "
+            f"Wind (MSE {wind_mse:.4f}, RMSE {wind_rmse:.4f}, MAE {wind_mae:.4f}) | "
+            f"PV (MSE {pv_mse:.4f}, RMSE {pv_rmse:.4f}, MAE {pv_mae:.4f}) | "
+            f"Load (MSE {load_mse:.4f}, RMSE {load_rmse:.4f}, MAE {load_mae:.4f})"
+        )
 
         if val_metric < best_val:
             best_val = val_metric
             torch.save(model.state_dict(), "best_memory_model.pth")
 
     model.load_state_dict(torch.load("best_memory_model.pth"))
-    pv_mse, pv_rmse, pv_mae, net_mse, net_rmse, net_mae = evaluate(model, test_loader, device)
+    wind_mse, wind_rmse, wind_mae, pv_mse, pv_rmse, pv_mae, load_mse, load_rmse, load_mae = evaluate(model, test_loader, device)
     print("\n===== Final Test Results =====")
+    print(f"Wind -> MSE: {wind_mse:.4f}, RMSE: {wind_rmse:.4f}, MAE: {wind_mae:.4f}")
     print(f"PV   -> MSE: {pv_mse:.4f}, RMSE: {pv_rmse:.4f}, MAE: {pv_mae:.4f}")
-    print(f"Net  -> MSE: {net_mse:.4f}, RMSE: {net_rmse:.4f}, MAE: {net_mae:.4f}")
+    print(f"Load -> MSE: {load_mse:.4f}, RMSE: {load_rmse:.4f}, MAE: {load_mae:.4f}")
 
     # dummy_x = torch.randn(1, train_ds.seq_len, input_dim).to(device)
     # dummy_hour = torch.randint(0, 24, (1, train_ds.seq_len)).to(device)
@@ -531,43 +497,14 @@ if __name__ == "__main__":
     # dummy_pv_mask = torch.from_numpy(train_ds.pv_mask).unsqueeze(0).to(device)
     # dummy_net_mask = torch.from_numpy(train_ds.net_mask).unsqueeze(0).to(device)
     
-    class _PVProfileWrapper(nn.Module):
-        def __init__(self, backbone, pv_mask, net_mask):
-            super().__init__()
-            self.backbone = backbone
-            self.pv_mask = pv_mask
-            self.net_mask = net_mask
-
-        def forward(self, x, hour, day):
-            return self.backbone(x, hour, day, self.pv_mask, self.net_mask)[0]
-        
     class PVProfilingWrapper(nn.Module):
-        def __init__(self, backbone, pv_mask, net_mask):
+        def __init__(self, backbone):
             super().__init__()
             self.backbone = backbone
-            # self.pv_mask = pv_mask
-            # self.net_mask = net_mask
-            self.pv_mask = pv_mask.squeeze(0)
-            self.net_mask = net_mask.squeeze(0)
 
         def forward(self, x, hour, day):
-            pv_pred, _ = self.backbone(x, hour, day, self.pv_mask, self.net_mask)
-            return pv_pred  # THOP는 첫 출력만 보면 됨
-        
-    class NetProfilingWrapper(nn.Module):
-        def __init__(self, backbone, pv_mask, net_mask):
-            super().__init__()
-            self.backbone = backbone
-            # self.pv_mask = pv_mask
-            # self.net_mask = net_mask
-            self.pv_mask = pv_mask.squeeze(0)
-            self.net_mask = net_mask.squeeze(0)
-
-        def forward(self, x, hour, day):
-            _, net_pred = self.backbone(x, hour, day, self.pv_mask, self.net_mask)
-            return net_pred
-
-    # profiling_model = _PVProfileWrapper(model, dummy_pv_mask, dummy_net_mask)
+            _, pv_pred, _ = self.backbone(x, hour, day)
+            return pv_pred
 
     seq_len = train_ds.seq_len
 
@@ -575,10 +512,7 @@ if __name__ == "__main__":
     dummy_hour = torch.randint(0, 24, (1, seq_len)).to(device)
     dummy_day = torch.randint(0, 7, (1, seq_len)).to(device)
 
-    pv_mask = torch.from_numpy(train_ds.pv_mask).unsqueeze(0).to(device)
-    net_mask = torch.from_numpy(train_ds.net_mask).unsqueeze(0).to(device)
-
-    pv_wrapper = PVProfilingWrapper(model, pv_mask, net_mask)
+    pv_wrapper = PVProfilingWrapper(model)
     flops, params = profile(pv_wrapper, inputs=(dummy_x, dummy_hour, dummy_day))
 
     # flops, params = profile(

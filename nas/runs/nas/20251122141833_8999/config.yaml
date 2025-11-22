@@ -1,0 +1,20 @@
+seq_len: 48
+pred_len: 6
+hidden_dim: 24
+kernel_size: 5
+dilation_pattern:
+- 2
+- 4
+- 8
+dilated_blocks: 3
+sinusoidal_dim: 24
+ema_decay: 0.8
+learnable_ema: true
+se_block: squeeze_ratio_8
+residual: last_block
+dropout: 0.15
+target_weights:
+- 0.8
+- 1.2
+- 1.0
+normalized_mae: false
