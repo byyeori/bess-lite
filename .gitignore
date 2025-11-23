@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Model checkpoints & scalers generated during experiments
+ckpt/*.pth
+ckpt/*.pkl
+!ckpt/best_memory_model.pth
+!ckpt/scaler_weather.pkl
+!ckpt/scaler_pvload.pkl
+!ckpt/scaler_pv_y.pkl
+!ckpt/scaler_load_y.pkl
+!ckpt/scaler_wind_y.pkl
+
+# Optuna / NAS run artifacts
+nas/runs/
+
+# Misc experiment logs
+*.log
