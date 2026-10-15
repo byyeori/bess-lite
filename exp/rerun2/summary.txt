@@ -1,0 +1,31 @@
+seeds: [42, 43, 44, 45, 46] | test samples: 1265
+
+--- normalized (mean ± sd over seeds) ---
+pv    baseline   MSE 0.025849 ± 0.005194  RMSE 0.1602 ± 0.0156  MAE 0.0804 ± 0.0096
+pv    baseline9  MSE 0.011504 ± 0.002062  RMSE 0.1069 ± 0.0099  MAE 0.0562 ± 0.0052
+pv    ours       MSE 0.008780 ± 0.000479  RMSE 0.0937 ± 0.0026  MAE 0.0489 ± 0.0035
+load  baseline   MSE 0.003754 ± 0.001170  RMSE 0.0607 ± 0.0097  MAE 0.0468 ± 0.0076
+load  baseline9  MSE 0.004000 ± 0.000604  RMSE 0.0631 ± 0.0049  MAE 0.0517 ± 0.0042
+load  ours       MSE 0.001289 ± 0.000594  RMSE 0.0349 ± 0.0092  MAE 0.0257 ± 0.0065
+wind  baseline   MSE 0.027552 ± 0.000404  RMSE 0.1660 ± 0.0012  MAE 0.0922 ± 0.0045
+wind  baseline9  MSE 0.027767 ± 0.003072  RMSE 0.1664 ± 0.0092  MAE 0.0911 ± 0.0081
+wind  ours       MSE 0.024166 ± 0.000684  RMSE 0.1554 ± 0.0022  MAE 0.0885 ± 0.0020
+
+--- original units (mean ± sd over seeds) ---
+pv    baseline   MSE 143327433.6 ± 28799751.4  RMSE 11926.5 ± 1165.1  MAE 5987.3 ± 713.9
+pv    baseline9  MSE 63787727.2 ± 11430983.0  RMSE 7959.7 ± 733.8  MAE 4185.5 ± 384.3
+pv    ours       MSE 48684224.8 ± 2658499.6  RMSE 6975.3 ± 191.4  MAE 3639.0 ± 258.6
+load  baseline   MSE 683235.7 ± 212909.6  RMSE 818.3 ± 130.4  MAE 631.6 ± 102.7
+load  baseline9  MSE 727836.5 ± 109826.4  RMSE 851.0 ± 66.8  MAE 697.1 ± 56.5
+load  ours       MSE 234487.4 ± 108029.6  RMSE 471.3 ± 124.5  MAE 346.4 ± 87.6
+wind  baseline   MSE 44200795.2 ± 647509.7  RMSE 6648.2 ± 48.6  MAE 3691.7 ± 179.3
+wind  baseline9  MSE 44545754.4 ± 4927547.8  RMSE 6666.0 ± 370.2  MAE 3650.4 ± 325.1
+wind  ours       MSE 38768288.0 ± 1096817.4  RMSE 6225.9 ± 88.4  MAE 3546.0 ± 80.0
+
+--- paired per-seed RMSE: ours better than ... in how many seeds ---
+pv    vs baseline  : 5/5 seeds, RMSE reduction 41.0% ± 6.4%
+pv    vs baseline9 : 5/5 seeds, RMSE reduction 11.8% ± 7.6%
+load  vs baseline  : 5/5 seeds, RMSE reduction 40.2% ± 21.1%
+load  vs baseline9 : 5/5 seeds, RMSE reduction 44.1% ± 16.5%
+wind  vs baseline  : 5/5 seeds, RMSE reduction 6.3% ± 1.5%
+wind  vs baseline9 : 4/5 seeds, RMSE reduction 6.4% ± 4.8%

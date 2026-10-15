@@ -1,0 +1,182 @@
+{
+ "ours (original code)": {
+  "params": 12523,
+  "analytic_MACs": 516768,
+  "analytic_FLOPs": 1033536,
+  "FlopCounterMode_FLOPs": 1030464,
+  "FlopCounterMode_ops": {
+   "aten.convolution": 916704,
+   "aten.addmm": 113760
+  },
+  "thop_MACs": 516960.0,
+  "layers": [
+   [
+    "Depthwise Conv1d k=5 (9 ch)",
+    2160
+   ],
+   [
+    "Pointwise Conv1d 9->32",
+    13824
+   ],
+   [
+    "Dilated Conv1d d=2 (32->32, k=3)",
+    147456
+   ],
+   [
+    "Dilated Conv1d d=4",
+    147456
+   ],
+   [
+    "Dilated Conv1d d=8",
+    147456
+   ],
+   [
+    "Memory aggregation (weighted sum)",
+    1536
+   ],
+   [
+    "Shared Linear 36->32 (all 48 steps)",
+    55296
+   ],
+   [
+    "3 heads: 32->16->1",
+    1584
+   ]
+  ]
+ },
+ "ours (inference-optimized, same outputs)": {
+  "params": 12523,
+  "analytic_MACs": 462624,
+  "analytic_FLOPs": 925248,
+  "FlopCounterMode_FLOPs": 922368,
+  "FlopCounterMode_ops": {
+   "aten.convolution": 916704,
+   "aten.addmm": 5664
+  },
+  "thop_MACs": 459024.0,
+  "layers": [
+   [
+    "Depthwise Conv1d k=5 (9 ch)",
+    2160
+   ],
+   [
+    "Pointwise Conv1d 9->32",
+    13824
+   ],
+   [
+    "Dilated Conv1d d=2 (32->32, k=3)",
+    147456
+   ],
+   [
+    "Dilated Conv1d d=4",
+    147456
+   ],
+   [
+    "Dilated Conv1d d=8",
+    147456
+   ],
+   [
+    "Memory aggregation (weighted sum)",
+    1536
+   ],
+   [
+    "Shared Linear 36->32 (last step only)",
+    1152
+   ],
+   [
+    "3 heads: 32->16->1",
+    1584
+   ]
+  ]
+ },
+ "baseline CNN-LSTM, 33 inputs": {
+  "params": 307651,
+  "analytic_MACs": 2338816,
+  "analytic_FLOPs": 4677632,
+  "FlopCounterMode_FLOPs": 2514944,
+  "FlopCounterMode_ops": {
+   "aten.convolution": 2377728,
+   "aten.addmm": 137216
+  },
+  "thop_MACs": 2363392.0,
+  "layers": [
+   [
+    "Conv1d 33->64 k=3 (T=48)",
+    304128
+   ],
+   [
+    "Conv1d 64->128 k=3 (T=24)",
+    589824
+   ],
+   [
+    "Conv1d 128->64 k=3 (T=12)",
+    294912
+   ],
+   [
+    "LSTM 64->64 (6 steps)",
+    196608
+   ],
+   [
+    "LSTM 64->128 (6 steps)",
+    589824
+   ],
+   [
+    "LSTM 128->64 (6 steps)",
+    294912
+   ],
+   [
+    "FC 64->1024",
+    65536
+   ],
+   [
+    "FC 1024->3",
+    3072
+   ]
+  ]
+ },
+ "baseline CNN-LSTM, 9 inputs": {
+  "params": 303043,
+  "analytic_MACs": 2117632,
+  "analytic_FLOPs": 4235264,
+  "FlopCounterMode_FLOPs": 2072576,
+  "FlopCounterMode_ops": {
+   "aten.convolution": 1935360,
+   "aten.addmm": 137216
+  },
+  "thop_MACs": 2142208.0,
+  "layers": [
+   [
+    "Conv1d 9->64 k=3 (T=48)",
+    82944
+   ],
+   [
+    "Conv1d 64->128 k=3 (T=24)",
+    589824
+   ],
+   [
+    "Conv1d 128->64 k=3 (T=12)",
+    294912
+   ],
+   [
+    "LSTM 64->64 (6 steps)",
+    196608
+   ],
+   [
+    "LSTM 64->128 (6 steps)",
+    589824
+   ],
+   [
+    "LSTM 128->64 (6 steps)",
+    294912
+   ],
+   [
+    "FC 64->1024",
+    65536
+   ],
+   [
+    "FC 1024->3",
+    3072
+   ]
+  ]
+ }
+}
